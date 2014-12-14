@@ -12,18 +12,32 @@
  * the License.
  */
 object Configuration {
-    def HDFS_HOST: String = "hdfs://10.0.0.4:8020/"
-    def PRIMARY_TOPIC_URL: String = "<http://xmlns.com/foaf/0.1/primaryTopic>"
-    def RDF_LABEL_URL: String = "<http://www.w3.org/2000/01/rdf-schema#label>"
-    def WIKI_PAGE_LINK_URL: String = "http://dbpedia.org/ontology/wikiPageWikiLink"
 
-    def EXCLUDE_FILE_PATTERN: String = "http://dbpedia.org/resource/File:"
-    def EXCLUDE_CATEGORY_PATTERN: String = "http://dbpedia.org/resource/Category:"
+  def HDFS_HOST: String = "hdfs://10.0.0.4:8020/"
 
-    def WIKI_LINKS_FILE_NAME: String = HDFS_HOST + "wikipedia_links_en.nt"
-    def WIKI_NAMES_FILE_NAME: String = HDFS_HOST + "labels_en.nt"
-    def PAGE_LINKS_FILE_NAME: String = HDFS_HOST + "page_links_en.nt"
+  def PRIMARY_TOPIC_URL: String = "<http://xmlns.com/foaf/0.1/primaryTopic>"
 
-    def PAGE_NODES_CSV_HEADER: String = "dbpedia\tid\tl:label\twikipedia\ttitle";
-    def PAGE_LINKS_CSV_HEADER: String = "start\tend\ttype";
+  def RDF_LABEL_URL: String = "<http://www.w3.org/2000/01/rdf-schema#label>"
+
+  def RDF_CATEGORY_URL: String = "<http://purl.org/dc/terms/subject>"
+
+  def WIKI_PAGE_LINK_URL: String = "http://dbpedia.org/ontology/wikiPageWikiLink"
+
+  def EXCLUDE_FILE_PATTERN: String = "http://dbpedia.org/resource/File:"
+
+  def EXCLUDE_CATEGORY_PATTERN: String = "http://dbpedia.org/resource/Category:"
+
+  def WIKI_LINKS_FILE_NAME: String = HDFS_HOST + "wikipedia_links_en.nt"
+
+  def WIKI_NAMES_FILE_NAME: String = HDFS_HOST + "labels_en.nt"
+
+  def PAGE_LINKS_FILE_NAME: String = HDFS_HOST + "page_links_en.nt"
+
+  def CATEGORIES_FILE_NAME: String = HDFS_HOST + "article_categories_en.nt"
+
+  def PAGE_NODES_CSV_HEADER: String = "dbpedia\tid\tl:label\twikipedia\ttitle";
+
+  def CATEGORY_NODES_CSV_HEADER: String = "id\tl:label\tname";
+
+  def PAGE_LINKS_CSV_HEADER: String = "start\tend\ttype";
 }

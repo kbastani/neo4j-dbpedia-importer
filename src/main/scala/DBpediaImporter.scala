@@ -19,99 +19,101 @@ import org.apache.spark.rdd.RDD
 /**
  * This is a Spark application that processes flat file RDF dumps of DBpedia.org and generates CSV files
  * that are used to generate Neo4j data store files.
- *
- * File inputs
- * -----------
- *
- * - DBpedia URI mapped to Wikipedia URI:
- *    Download:   http://data.dws.informatik.uni-mannheim.de/dbpedia/2014/en/wikipedia_links_en.nt.bz2
- *    File size:  bzip2 compressed archive (261 MB)
- *    Header:     DBPEDIA_RESOURCE_URI, RDF_TYPE, WIKIPEDIA_PAGE_URI
- *
- * - Wikipedia page link graph:
- *    Download:   http://data.dws.informatik.uni-mannheim.de/dbpedia/2014/en/page_links_en.nt.bz2
- *    File size:  bzip2 compressed archive (1.2 GB)
- *    Header:     DBPEDIA_RESOURCE_SRC, RDF_TYPE, DBPEDIA_RESOURCE_DST
- *
- * - Page titles mapped to DBpedia URI:
- *    Download:   http://data.dws.informatik.uni-mannheim.de/dbpedia/2014/en/labels_en.nt.bz2
- *    File size:  bzip2 compressed archive (155 MB)
- *    Header:     DBPEDIA_RESOURCE_URI, RDF_TYPE, PAGE_NAME
- *
- * - DBpedia categories mapped to pages:
- *    Download:   http://data.dws.informatik.uni-mannheim.de/dbpedia/2014/en/article_categories_en.nt.bz2
- *    File size:  bzip2 compressed archive (178 MB)
- *    Header:     DBPEDIA_RESOURCE_URI, RDF_TYPE, DBPEDIA_CATEGORY_URI
- *
- * File outputs
- * ------------
- *
- * -  HDFS dir:   /pagenodes
- *    Header:     dbpedia, id, l:label, wikipedia, title
- *
- * -  HDFS dir:   /pagerels
- *    Header:     start, end, type
- *
- * -  HDFS dir:   /categorynodes
- *    Header:     dbpedia, id, l:label
- *
- * -  HDFS dir:   /categoryrels
- *    Header:     start, end, type
- *
- * HDFS file merge
- * ---------------
- *
- * To export the partitioned results from Hadoop 1.0.4, you can run the following
- * HDFS file system commands from the $HADOOP_HOME directory.
- *
- * -  File name:  page_nodes.csv
- *    Command:    bin/hadoop fs -cat "/pagenodes/part-*" | bin/hadoop fs -put - /page_nodes.csv
- *
- * -  File name:  page_rels.csv
- *    Command:    bin/hadoop fs -cat "/pagerels/part-*" | bin/hadoop fs -put - /page_rels.csv
- *
- * -  File name:  category_nodes.csv
- *    Command:    bin/hadoop fs -cat "/categorynodes/part-*" | bin/hadoop fs -put - /category_nodes.csv
- *
- * -  File name:  category_rels.csv
- *    Command:    bin/hadoop fs -cat "/categoryrels/part-*" | bin/hadoop fs -put - /category_rels.csv
- *
- * HDFS file export
- * ----------------
- *
- * To copy the CSV files off of HDFS and onto your local file system, run the following command:
- *
- * -  Command: bin/hadoop fs -copyToLocal /page_nodes.csv ~/neo4j-batch-importer/page_nodes.csv
- * -  Command: bin/hadoop fs -copyToLocal /page_rels.csv ~/neo4j-batch-importer/page_rels.csv
- * -  Command: bin/hadoop fs -copyToLocal /category_nodes.csv ~/neo4j-batch-importer/category_nodes.csv
- * -  Command: bin/hadoop fs -copyToLocal /category_rels.csv ~/neo4j-batch-importer/category_rels.csv
  */
 object DBpediaImporter {
+  //-master "local" --total-executor-cores 8 --driver-memory 14g --driver-java-options "-Dspark.executor.memory=12g"
+  val conf = new SparkConf()
+    .setAppName("Simple Application")
+    .setMaster("local[8]")
+    .set("total-executor-cores", "8")
+    .set("driver-memory", "12g")
+    .set("spark.executor.memory", "12g")
+    .set("spark.driver.memory", "12g")
 
-  val conf = new SparkConf().setAppName("Simple Application").setMaster("local[8]")
   val sc = new SparkContext(conf)
 
-
   def main(args: Array[String]) {
+
+    // Import the page nodes and link graph
+    val pageIndex: scala.collection.Map[String, Long] = importPageNodesAndLinks()
+
+    // We need the last unique id, which will be used to offset the id for category nodes
+    val lastIndexPointer = pageIndex.toList.sortBy(a => (a._2, a._1)).last._2: Long
+
+    // Load categories file
+    val categoriesFile = sc.textFile(Configuration.CATEGORIES_FILE_NAME)
+
+    // Process and prepare the categories for creating the nodes file
+    val categoriesMap = processCategories(categoriesFile)
+
+    // Generate a categories and then join it to the pageIndex
+
+    // Step 1: Get a distinct list of categories and generate a node index
+    val categoryNodeData = categoriesMap.map(cat => cat._1)
+      .zipWithUniqueId()
+      .map(a => (a._1, a._2 + lastIndexPointer))
+
+    // Generate the category node rows with property name and id
+    val categoryNodeRows = generateCategoryNodes(categoryNodeData)
+
+    // Save the category nodes CSV
+    categoryNodeRows.saveAsTextFile(Configuration.HDFS_HOST + "categorynodes")
+
+  }
+
+  def processCategories(categoriesFile: RDD[String]): RDD[(String, Iterable[String])] = {
+    val categoriesMap = categoriesFile
+      .filter(line => line.contains(Configuration.RDF_CATEGORY_URL))
+      .map(e => e.split("(?<=>)\\s(?=<)|\\s\\.$").filter(a => !a.contains(Configuration.RDF_CATEGORY_URL)))
+      .map(uri => (uri(1), uri(0)))
+      .groupByKey()
+
+    categoriesMap
+  }
+
+  def importPageNodesAndLinks(): scala.collection.Map[String, Long] = {
+    // Load the text files
     val wikiLinksFile = sc.textFile(Configuration.WIKI_LINKS_FILE_NAME)
     val wikiNamesFile = sc.textFile(Configuration.WIKI_NAMES_FILE_NAME)
     val pageLinksFile = sc.textFile(Configuration.PAGE_LINKS_FILE_NAME)
 
+    // First stage: Join the Wikipedia map file and the names map file into a single RDD
+    // Process and prepare the Wikipedia links file to join on the DBpedia key
     val wikiLinksMap = processWikiLinks(wikiLinksFile)
-    val wikiNamesMap = processWikiNames(wikiNamesFile)
 
-    val pageNodeData = joinWikiNamesLinks(wikiLinksMap, wikiNamesMap)
+    // Process and prepare the page names to join on the DBpedia key
+    val pageNamesMap = processPageNames(wikiNamesFile)
+
+    // Join the Wikipedia map and the names map on the DBpedia key
+    val pageNodeData = joinNamesToLinks(wikiLinksMap, pageNamesMap)
+
+    // Take the union of the two datasets and generate a CSV as an RDD
     val pageNodeRows = generatePageNodes(pageNodeData)
 
+    // Second stage: Encode each value in the page links file with the
+    // unique node id generated during the last stage
+
+    // Create an in-memory hash table to lookup DBpedia keys and return the
+    // encoded unique node id
     val pageNodeIndex = pageNodeData.map(r => {
       r._1
     }).zipWithUniqueId().collectAsMap()
 
+    // Process and prepare the page links file to be encoded on the DBpedia key
     val pageLinkRelationshipData = processPageLinks(pageLinksFile)
+
+    // Encode each DBpedia key with the Neo4j node id located in the pageNodeIndex table
     val pageLinkRelationshipRows = encodePageLinks(pageLinkRelationshipData, pageNodeIndex)
 
+    // Final stage: Save the page nodes and relationship results to HDFS
+
+    // Save the page nodes CSV
     pageNodeRows.saveAsTextFile(Configuration.HDFS_HOST + "pagenodes")
+
+    // Save the page rels CSV
     pageLinkRelationshipRows.saveAsTextFile(Configuration.HDFS_HOST + "pagerels")
+
+    pageNodeIndex
   }
 
   /**
@@ -126,7 +128,7 @@ object DBpediaImporter {
       .map(e => {
       e.split("(?<=>)\\s(?=<)|\\s\\.$")
         .filter(a => {
-        !a.contains()
+        !a.contains(Configuration.PRIMARY_TOPIC_URL)
       })
     })
       .map(uri => {
@@ -144,7 +146,7 @@ object DBpediaImporter {
    * @param wikiNamesFile
    * @return
    */
-  def processWikiNames(wikiNamesFile: RDD[String]): RDD[String] = {
+  def processPageNames(wikiNamesFile: RDD[String]): RDD[String] = {
     val wikiNamesMap = wikiNamesFile.filter(line => line.contains(Configuration.RDF_LABEL_URL))
       .filter(line => !line.contains(Configuration.EXCLUDE_FILE_PATTERN))
       .map(e => {
@@ -163,16 +165,12 @@ object DBpediaImporter {
    * @param wikiNamesMap
    * @return
    */
-  def joinWikiNamesLinks(wikiLinksMap: RDD[String], wikiNamesMap: RDD[String]): RDD[(String, String)] = {
-    val joinedList = wikiLinksMap.union(wikiNamesMap)
-      .map(line => {
-      val items = line.split("^<|>\\s<|\\>\\s\\\"|\\\"$|>$")
-        .filter(!_.isEmpty);
-
+  def joinNamesToLinks(wikiLinksMap: RDD[String], wikiNamesMap: RDD[String]): RDD[(String, Iterable[String])] = {
+    val joinedList = wikiLinksMap.union(wikiNamesMap).map(line => {
+      val items = line.split("^<|>\\s<|\\>\\s\\\"|\\\"$|>$").filter(!_.isEmpty)
       val mapResult = if (items.length >= 2) (items(0), items(1)) else ("N/A", "N/A")
-
       mapResult
-    }).filter(items => items._1 != "N/A").map(a => (a._1, a._2))
+    }).filter(items => items._1 != "N/A").map(a => (a._1, a._2)).groupByKey()
 
     joinedList
   }
@@ -182,12 +180,20 @@ object DBpediaImporter {
    * @param pageNodeData
    * @return
    */
-  def generatePageNodes(pageNodeData: RDD[(String, String)]): RDD[String] = {
+  def generatePageNodes(pageNodeData: RDD[(String, Iterable[String])]): RDD[String] = {
     val header = sc.parallelize(Seq(Configuration.PAGE_NODES_CSV_HEADER).toList)
     val rows = pageNodeData.zipWithUniqueId().map(e => {
-      e._1._1 + "\t" + e._2 + "\t" + "Page\t" + e._1._2.toList.mkString("\t")
+      e._1._1 + "\t" + e._2 + "\tPage\t" + e._1._2.toList.mkString("\t")
     })
 
+    val result = header.union(rows)
+
+    result
+  }
+
+  def generateCategoryNodes(categoryNodeData: RDD[(String, Long)]): RDD[String] = {
+    val header = sc.parallelize(Seq(Configuration.CATEGORY_NODES_CSV_HEADER).toList)
+    val rows = categoryNodeData.map(line => line._2 + "\tCategory\t" + line._1 )
     val result = header.union(rows)
 
     result
@@ -236,7 +242,7 @@ object DBpediaImporter {
    */
   def generatePageLinkRelationships(pageLinkResults: RDD[(String, String)]): RDD[String] = {
     val relHeader = sc.parallelize(Seq(Configuration.PAGE_LINKS_CSV_HEADER).toList)
-    val relRows = pageLinkResults.map(line => { line._1 + "\t" + line._2 + "\tHAS_LINK" }).map(line => line.toString)
+    val relRows = pageLinkResults.map(line => { line._1 + "\t" + line._2 + "\tHAS_LINK" })
     val relResult = relHeader.union(relRows)
 
     relResult
