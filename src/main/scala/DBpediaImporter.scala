@@ -21,21 +21,15 @@ import org.apache.spark.{SparkConf, SparkContext}
  * that are used to generate Neo4j data store files.
  */
 object DBpediaImporter {
-  //-master "local" --total-executor-cores 8 --driver-memory 14g --driver-java-options "-Dspark.executor.memory=12g"
-//  .setMaster("local[8]")
-//    .set("total-executor-cores", "8")
-//    .set("driver-memory", "28g")
-//    .set("spark.executor.memory", "28g")
-//    .set("spark.driver.memory", "28g")
 
-
+  // This requires at least 50gb of system memory to run. You've been warned. Use EC2.
   val conf = new SparkConf()
     .setAppName("Simple Application")
       .setMaster("local[8]")
         .set("total-executor-cores", "8")
-        .set("driver-memory", "28g")
-        .set("spark.executor.memory", "28g")
-        .set("spark.driver.memory", "28g")
+        .set("driver-memory", "50g")
+        .set("spark.executor.memory", "50g")
+        .set("spark.driver.memory", "50g")
 
 
   val sc = new SparkContext(conf)
@@ -55,7 +49,7 @@ object DBpediaImporter {
     val lastIndexPointer = pageIndex.toList.sortBy(a => (a._2, a._1)).last._2: Long
 
     // Load categories file
-    val categoriesFile = sc.parallelize(sc.textFile(Configuration.CATEGORIES_FILE_NAME).take(100000))
+    val categoriesFile = sc.textFile(Configuration.CATEGORIES_FILE_NAME)
 
     // Process and prepare the categories for creating the nodes file
     val categoriesMap = processCategories(categoriesFile)
@@ -82,7 +76,7 @@ object DBpediaImporter {
     })
 
     // Load categories skos broader concept file
-    val categoriesSkosFile = sc.parallelize(sc.textFile(Configuration.CATEGORY_SKOS_FILE_NAME).take(100000))
+    val categoriesSkosFile = sc.textFile(Configuration.CATEGORY_SKOS_FILE_NAME)
     val categoriesSkosMap = processCategories(categoriesSkosFile)
     val categorySkosRelationshipRows = categoriesSkosMap.map(row => {
       row._2.map(a => {
@@ -118,9 +112,9 @@ object DBpediaImporter {
 
   def importPageNodesAndLinks(): scala.collection.Map[String, Long] = {
     // Load the text files
-    val wikiLinksFile = sc.parallelize(sc.textFile(Configuration.WIKI_LINKS_FILE_NAME).take(100000))
-    val wikiNamesFile = sc.parallelize(sc.textFile(Configuration.WIKI_NAMES_FILE_NAME).take(100000))
-    val pageLinksFile = sc.parallelize(sc.textFile(Configuration.PAGE_LINKS_FILE_NAME).take(100000))
+    val wikiLinksFile = sc.textFile(Configuration.WIKI_LINKS_FILE_NAME)
+    val wikiNamesFile = sc.textFile(Configuration.WIKI_NAMES_FILE_NAME)
+    val pageLinksFile = sc.textFile(Configuration.PAGE_LINKS_FILE_NAME)
 
     // First stage: Join the Wikipedia map file and the names map file into a single RDD
     // Process and prepare the Wikipedia links file to join on the DBpedia key
