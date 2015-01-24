@@ -21,6 +21,8 @@ object Configuration {
 
   def RDF_CATEGORY_URL: String = "<http://purl.org/dc/terms/subject>"
 
+  def CATEGORY_SKOS_URL: String = "<http://www.w3.org/2004/02/skos/core#broader>"
+
   def WIKI_PAGE_LINK_URL: String = "http://dbpedia.org/ontology/wikiPageWikiLink"
 
   def EXCLUDE_FILE_PATTERN: String = "http://dbpedia.org/resource/File:"
@@ -35,9 +37,11 @@ object Configuration {
 
   def CATEGORIES_FILE_NAME: String = HDFS_HOST + "article_categories_en.nt"
 
+  def CATEGORY_SKOS_FILE_NAME: String = HDFS_HOST + "skos_categories_en.nt"
+
   def PAGE_NODES_CSV_HEADER: String = "dbpedia\tid\tl:label\twikipedia\ttitle";
 
-  def CATEGORY_NODES_CSV_HEADER: String = "id\tl:label\tname";
+  def CATEGORY_NODES_CSV_HEADER: String = "id\tl:label\tdbpedia\ttitle";
 
   def PAGE_LINKS_CSV_HEADER: String = "start\tend\ttype";
 }

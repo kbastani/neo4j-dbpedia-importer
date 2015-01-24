@@ -12,9 +12,9 @@
  * the License.
  */
 
-import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.SparkContext._
 import org.apache.spark.rdd.RDD
+import org.apache.spark.{SparkConf, SparkContext}
 
 /**
  * This is a Spark application that processes flat file RDF dumps of DBpedia.org and generates CSV files
@@ -22,26 +22,40 @@ import org.apache.spark.rdd.RDD
  */
 object DBpediaImporter {
   //-master "local" --total-executor-cores 8 --driver-memory 14g --driver-java-options "-Dspark.executor.memory=12g"
+//  .setMaster("local[8]")
+//    .set("total-executor-cores", "8")
+//    .set("driver-memory", "28g")
+//    .set("spark.executor.memory", "28g")
+//    .set("spark.driver.memory", "28g")
+
+
   val conf = new SparkConf()
     .setAppName("Simple Application")
-    .setMaster("local[8]")
-    .set("total-executor-cores", "8")
-    .set("driver-memory", "12g")
-    .set("spark.executor.memory", "12g")
-    .set("spark.driver.memory", "12g")
+      .setMaster("local[8]")
+        .set("total-executor-cores", "8")
+        .set("driver-memory", "28g")
+        .set("spark.executor.memory", "28g")
+        .set("spark.driver.memory", "28g")
+
 
   val sc = new SparkContext(conf)
 
   def main(args: Array[String]) {
 
     // Import the page nodes and link graph
-    val pageIndex: scala.collection.Map[String, Long] = importPageNodesAndLinks()
+    val pageIndex: collection.Map[String, Long] = importPageNodesAndLinks()
 
+    // Import the category nodes
+    importCategoryNodesAndLinks(pageIndex)
+
+  }
+
+  def importCategoryNodesAndLinks(pageIndex: collection.Map[String, Long]) {
     // We need the last unique id, which will be used to offset the id for category nodes
     val lastIndexPointer = pageIndex.toList.sortBy(a => (a._2, a._1)).last._2: Long
 
     // Load categories file
-    val categoriesFile = sc.textFile(Configuration.CATEGORIES_FILE_NAME)
+    val categoriesFile = sc.parallelize(sc.textFile(Configuration.CATEGORIES_FILE_NAME).take(100000))
 
     // Process and prepare the categories for creating the nodes file
     val categoriesMap = processCategories(categoriesFile)
@@ -59,12 +73,43 @@ object DBpediaImporter {
     // Save the category nodes CSV
     categoryNodeRows.saveAsTextFile(Configuration.HDFS_HOST + "categorynodes")
 
+    val categoryIndex = categoryNodeData.collectAsMap()
+    val relHeader = sc.parallelize(Seq(Configuration.PAGE_LINKS_CSV_HEADER).toList)
+    val categoryRelationshipRows = categoriesMap.map(row => {
+      row._2.map(a => {
+        (if(categoryIndex.contains(row._1)) categoryIndex(row._1) else "-1")  + "\t" + (if(pageIndex.contains(a)) pageIndex(a) else "-1") + "\tHAS_CATEGORY"
+      }).mkString("\n")
+    })
+
+    // Load categories skos broader concept file
+    val categoriesSkosFile = sc.parallelize(sc.textFile(Configuration.CATEGORY_SKOS_FILE_NAME).take(100000))
+    val categoriesSkosMap = processCategories(categoriesSkosFile)
+    val categorySkosRelationshipRows = categoriesSkosMap.map(row => {
+      row._2.map(a => {
+        (if(categoryIndex.contains(row._1)) categoryIndex(row._1) else "-1")  + "\t" + (if(categoryIndex.contains(a)) categoryIndex(a) else "-1") + "\tHAS_CATEGORY"
+      }).mkString("\n")
+    })
+
+    // Unions and header
+    val categoryRelationshipMappingResult = categorySkosRelationshipRows.union(categoryRelationshipRows)
+    val relResult = relHeader.union(categoryRelationshipMappingResult)
+    relResult.saveAsTextFile(Configuration.HDFS_HOST + "categoryrels-stage")
+
+    // Reload it and filter out bad data
+    val categoryMappedRows = sc.textFile(Configuration.HDFS_HOST + "categoryrels-stage").filter(line => !line.contains("-1"))
+
+    // Save it to HDFS
+    categoryMappedRows.saveAsTextFile(Configuration.HDFS_HOST + "categoryrels")
   }
 
   def processCategories(categoriesFile: RDD[String]): RDD[(String, Iterable[String])] = {
     val categoriesMap = categoriesFile
-      .filter(line => line.contains(Configuration.RDF_CATEGORY_URL))
-      .map(e => e.split("(?<=>)\\s(?=<)|\\s\\.$").filter(a => !a.contains(Configuration.RDF_CATEGORY_URL)))
+      .filter(line => line.contains(Configuration.RDF_CATEGORY_URL) || line.contains(Configuration.CATEGORY_SKOS_URL))
+      .map(e => {
+      e.split("^<|>\\s<|\\>\\s\\\"|>\\s\\.$")
+        .filter(!_.isEmpty)
+        .filter(a => !a.contains(Configuration.RDF_CATEGORY_URL.replace("<", "").replace(">", ""))
+                  && !a.contains(Configuration.CATEGORY_SKOS_URL.replace("<", "").replace(">", ""))) })
       .map(uri => (uri(1), uri(0)))
       .groupByKey()
 
@@ -73,9 +118,9 @@ object DBpediaImporter {
 
   def importPageNodesAndLinks(): scala.collection.Map[String, Long] = {
     // Load the text files
-    val wikiLinksFile = sc.textFile(Configuration.WIKI_LINKS_FILE_NAME)
-    val wikiNamesFile = sc.textFile(Configuration.WIKI_NAMES_FILE_NAME)
-    val pageLinksFile = sc.textFile(Configuration.PAGE_LINKS_FILE_NAME)
+    val wikiLinksFile = sc.parallelize(sc.textFile(Configuration.WIKI_LINKS_FILE_NAME).take(100000))
+    val wikiNamesFile = sc.parallelize(sc.textFile(Configuration.WIKI_NAMES_FILE_NAME).take(100000))
+    val pageLinksFile = sc.parallelize(sc.textFile(Configuration.PAGE_LINKS_FILE_NAME).take(100000))
 
     // First stage: Join the Wikipedia map file and the names map file into a single RDD
     // Process and prepare the Wikipedia links file to join on the DBpedia key
@@ -106,12 +151,13 @@ object DBpediaImporter {
     val pageLinkRelationshipRows = encodePageLinks(pageLinkRelationshipData, pageNodeIndex)
 
     // Final stage: Save the page nodes and relationship results to HDFS
+    val pageNodeRels = generatePageLinkRelationships(pageLinkRelationshipRows)
 
     // Save the page nodes CSV
     pageNodeRows.saveAsTextFile(Configuration.HDFS_HOST + "pagenodes")
 
     // Save the page rels CSV
-    pageLinkRelationshipRows.saveAsTextFile(Configuration.HDFS_HOST + "pagerels")
+    pageNodeRels.saveAsTextFile(Configuration.HDFS_HOST + "pagerels")
 
     pageNodeIndex
   }
@@ -192,8 +238,9 @@ object DBpediaImporter {
   }
 
   def generateCategoryNodes(categoryNodeData: RDD[(String, Long)]): RDD[String] = {
+    val namePattern = """(?<=Category\:).*$""".r
     val header = sc.parallelize(Seq(Configuration.CATEGORY_NODES_CSV_HEADER).toList)
-    val rows = categoryNodeData.map(line => line._2 + "\tCategory\t" + line._1 )
+    val rows = categoryNodeData.map(line => line._2 + "\tCategory\t" + line._1 + "\t" + (namePattern findFirstIn line._1).getOrElse("").replace("_", " ") )
     val result = header.union(rows)
 
     result
@@ -205,12 +252,16 @@ object DBpediaImporter {
    * @param pageNodeIndex
    * @return
    */
-  def encodePageLinks(pageLinks: RDD[(Array[String])], pageNodeIndex: scala.collection.Map[String, Long]): RDD[(Long, Long)] = {
+  def encodePageLinks(pageLinks: RDD[String], pageNodeIndex: scala.collection.Map[String, Long]): RDD[(Long, Long)] = {
+    val matchPattern = """([^\s]+)""".r
+
     // Filter out bad links
-    val encodedPageLinksResult = pageLinks.filter(uri => {
-      !(pageNodeIndex.getOrElse(uri(0), -1) == -1 || pageNodeIndex.getOrElse(uri(1), -1) == -1)
-    }).map(uri => {
-      (pageNodeIndex(uri(0)), pageNodeIndex(uri(1)))
+    val encodedPageLinksResult = pageLinks.map(uri => {
+      val matches = for (m <- matchPattern findAllMatchIn uri) yield m group 1
+      val uris:List[String] = matches.toList.take(2)
+      (pageNodeIndex.getOrElse(uris(0), -1) :Long, pageNodeIndex.getOrElse(uris(1), -1) :Long)
+    }).filter(uri => {
+      !(uri._1 == -1 || uri._2 == -1)
     })
 
     encodedPageLinksResult
@@ -221,7 +272,7 @@ object DBpediaImporter {
    * @param pageLinksFile
    * @return
    */
-  def processPageLinks(pageLinksFile: RDD[String]): RDD[(Array[String])] = {
+  def processPageLinks(pageLinksFile: RDD[String]): RDD[String] = {
     val pageLinks = pageLinksFile.filter(line =>
       line.contains(Configuration.WIKI_PAGE_LINK_URL) &&
         !line.contains(Configuration.EXCLUDE_FILE_PATTERN) &&
@@ -230,6 +281,12 @@ object DBpediaImporter {
       e.split("^<|>\\s<|\\>\\s\\\"|>\\s\\.$")
         .filter(!_.isEmpty)
         .filter(a => { !a.contains(Configuration.WIKI_PAGE_LINK_URL) })
+    })
+    .map(uri => {
+      (uri(0), uri(1))
+    })
+      .map(line => {
+      line._1 + " " + line._2
     })
 
     pageLinks
@@ -240,7 +297,7 @@ object DBpediaImporter {
    * @param pageLinkResults
    * @return
    */
-  def generatePageLinkRelationships(pageLinkResults: RDD[(String, String)]): RDD[String] = {
+  def generatePageLinkRelationships(pageLinkResults: RDD[(Long, Long)]): RDD[String] = {
     val relHeader = sc.parallelize(Seq(Configuration.PAGE_LINKS_CSV_HEADER).toList)
     val relRows = pageLinkResults.map(line => { line._1 + "\t" + line._2 + "\tHAS_LINK" })
     val relResult = relHeader.union(relRows)
