@@ -30,6 +30,12 @@ DBpedia categories mapped to pages:
     Download:   http://data.dws.informatik.uni-mannheim.de/dbpedia/2014/en/article_categories_en.nt.bz2
     File size:  bzip2 compressed archive (178 MB)
     Header:     DBPEDIA_RESOURCE_URI, RDF_TYPE, DBPEDIA_CATEGORY_URI
+    
+DBpedia categories mapped to categories:
+
+    Download:   http://data.dws.informatik.uni-mannheim.de/dbpedia/2014/en/skos_categories_en.nt.bz2
+    File size:  bzip2 compressed archive (32.9 MB)
+    Header:     DBPEDIA_CATEGORY_URI, RDF_TYPE, DBPEDIA_CATEGORY_URI
 
 File outputs
 ------------
@@ -76,3 +82,7 @@ To copy the CSV files off of HDFS and onto your local file system, run the follo
     bin/hadoop fs -copyToLocal /category_nodes.csv ~/neo4j-batch-importer/category_nodes.csv
     bin/hadoop fs -copyToLocal /category_rels.csv ~/neo4j-batch-importer/category_rels.csv
 
+Shell files
+---------------
+
+I've packed up some useful scripts and put them in the `/sbin` directory. One of those scripts downloads all of the required DBpedia files and extracts them into Hadoop HDFS.
