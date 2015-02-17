@@ -13,11 +13,13 @@
  */
 object Configuration {
 
-  def HDFS_HOST: String = "hdfs://10.0.0.4:8020/"
+  def HDFS_HOST: String = "hdfs://localhost:9000/"
 
   def PRIMARY_TOPIC_URL: String = "<http://xmlns.com/foaf/0.1/primaryTopic>"
 
   def RDF_LABEL_URL: String = "<http://www.w3.org/2000/01/rdf-schema#label>"
+
+  def RDF_ONTOLOGY_URL: String = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
 
   def RDF_CATEGORY_URL: String = "<http://purl.org/dc/terms/subject>"
 
@@ -39,9 +41,13 @@ object Configuration {
 
   def CATEGORY_SKOS_FILE_NAME: String = HDFS_HOST + "skos_categories_en.nt"
 
+  def INSTANCE_TYPES_FILE_NAME: String = HDFS_HOST + "instance_types_en.nt"
+
   def PAGE_NODES_CSV_HEADER: String = "dbpedia\tid\tl:label\twikipedia\ttitle";
 
   def CATEGORY_NODES_CSV_HEADER: String = "id\tl:label\tdbpedia\ttitle";
+
+  def ONTOLOGY_NODES_CSV_HEADER: String = "id\tl:label\tdbpedia\ttitle";
 
   def PAGE_LINKS_CSV_HEADER: String = "start\tend\ttype";
 }

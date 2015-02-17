@@ -12,9 +12,13 @@
  * the License.
  */
 
+import java.net.URLDecoder
+
 import org.apache.spark.SparkContext._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkConf, SparkContext}
+
+import scala.util.Try
 
 /**
  * This is a Spark application that processes flat file RDF dumps of DBpedia.org and generates CSV files
@@ -24,7 +28,7 @@ object DBpediaImporter {
 
   // This requires at least 50gb of system memory to run. You've been warned. Use EC2.
   val conf = new SparkConf()
-    .setAppName("Simple Application")
+    .setAppName("DBpedia Transform")
       .setMaster("local[8]")
         .set("total-executor-cores", "8")
         .set("driver-memory", "50g")
@@ -34,17 +38,65 @@ object DBpediaImporter {
 
   val sc = new SparkContext(conf)
 
+
+
   def main(args: Array[String]) {
 
     // Import the page nodes and link graph
     val pageIndex: collection.Map[String, Long] = importPageNodesAndLinks()
 
     // Import the category nodes
-    importCategoryNodesAndLinks(pageIndex)
+    val lastPointer: Long = importCategoryNodesAndLinks(pageIndex)
+
+    // Import the ontology graph
+    importOntologyNodesAndLinks(lastPointer, pageIndex)
 
   }
 
-  def importCategoryNodesAndLinks(pageIndex: collection.Map[String, Long]) {
+  def importOntologyNodesAndLinks(lastIndexPointer: Long, pageIndex: collection.Map[String, Long]) {
+    // Load ontology file
+    val ontologyFile = sc.textFile(Configuration.INSTANCE_TYPES_FILE_NAME)
+
+    // Process and prepare the ontology nodes
+    val ontologyMap = processOntology(ontologyFile)
+
+    // Step 1: Get a distinct list of ontology and generate a node index
+    val ontologyNodeData = ontologyMap.map(ont => ont._1)
+      .zipWithUniqueId()
+      .map(a => (a._1, a._2 + lastIndexPointer))
+
+    // Generate the ontology node rows with property name and id
+    val ontologyNodeRows = generateOntologyNodes(ontologyNodeData)
+
+    // Save the ontology nodes CSV
+    ontologyNodeRows.saveAsTextFile(Configuration.HDFS_HOST + "ontologynodes")
+
+    val ontologyIndex = ontologyNodeData.collectAsMap()
+    val relHeader = sc.parallelize(Seq(Configuration.PAGE_LINKS_CSV_HEADER).toList)
+    val ontologyRelationshipRows = ontologyMap.map(row => {
+      row._2.map(a => {
+        (if(ontologyIndex.contains(row._1)) ontologyIndex(row._1) else "-1")  + "\t" + (if(pageIndex.contains(a)) pageIndex(a) else "-1") + "\tHAS_ONTOLOGY"
+      }).mkString("\n")
+    })
+
+    // Unions and header
+    val relResult = relHeader.union(ontologyRelationshipRows)
+    relResult.saveAsTextFile(Configuration.HDFS_HOST + "ontologyrels-stage")
+
+    // Reload it and filter out bad data
+    val ontologyMappedRows = sc.textFile(Configuration.HDFS_HOST + "ontologyrels-stage").filter(line => !line.contains("-1"))
+
+    // Save it to HDFS
+    ontologyMappedRows.saveAsTextFile(Configuration.HDFS_HOST + "ontologyrels")
+
+  }
+
+  /**
+   * Import category mappings.
+   * @param pageIndex The hash map of page names to their corresponding import id.
+   * @return Returns the last index pointer to continue the import process.
+   */
+  def importCategoryNodesAndLinks(pageIndex: collection.Map[String, Long]) : Long = {
     // We need the last unique id, which will be used to offset the id for category nodes
     val lastIndexPointer = pageIndex.toList.sortBy(a => (a._2, a._1)).last._2: Long
 
@@ -94,6 +146,10 @@ object DBpediaImporter {
 
     // Save it to HDFS
     categoryMappedRows.saveAsTextFile(Configuration.HDFS_HOST + "categoryrels")
+
+    val categoryLastIndexPointer = categoryIndex.toList.sortBy(a => (a._2, a._1)).last._2: Long
+
+    categoryLastIndexPointer
   }
 
   def processCategories(categoriesFile: RDD[String]): RDD[(String, Iterable[String])] = {
@@ -108,6 +164,19 @@ object DBpediaImporter {
       .groupByKey()
 
     categoriesMap
+  }
+
+  def processOntology(ontologyFile: RDD[String]): RDD[(String, Iterable[String])] = {
+    val ontologyMap = ontologyFile
+      .filter(line => line.contains(Configuration.RDF_ONTOLOGY_URL))
+      .map(e => {
+      e.split("^<|>\\s<|\\>\\s\\\"|>\\s\\.$")
+        .filter(!_.isEmpty)
+        .filter(a => !a.contains(Configuration.RDF_ONTOLOGY_URL.replace("<", "").replace(">", ""))) })
+      .map(uri => (uri(1), uri(0)))
+      .groupByKey()
+
+    ontologyMap
   }
 
   def importPageNodesAndLinks(): scala.collection.Map[String, Long] = {
@@ -194,7 +263,7 @@ object DBpediaImporter {
         .filter(a => { !a.contains(Configuration.RDF_LABEL_URL) })
     })
       .map(uri => { (uri(0), uri(1)) })
-      .map(line => { line._1 + " " + line._2 })
+      .map(line => { line._1 + " " + Try(URLDecoder.decode(line._2)).getOrElse("") })
 
     wikiNamesMap
   }
@@ -234,7 +303,16 @@ object DBpediaImporter {
   def generateCategoryNodes(categoryNodeData: RDD[(String, Long)]): RDD[String] = {
     val namePattern = """(?<=Category\:).*$""".r
     val header = sc.parallelize(Seq(Configuration.CATEGORY_NODES_CSV_HEADER).toList)
-    val rows = categoryNodeData.map(line => line._2 + "\tCategory\t" + line._1 + "\t" + (namePattern findFirstIn line._1).getOrElse("").replace("_", " ") )
+    val rows = categoryNodeData.map(line => line._2 + "\tCategory\t" + line._1 + "\t" + Try(URLDecoder.decode((namePattern findFirstIn line._1).getOrElse("").replace("_", " "))).getOrElse("") )
+    val result = header.union(rows)
+
+    result
+  }
+
+  def generateOntologyNodes(ontologyNodeData: RDD[(String, Long)]): RDD[String] = {
+    val namePattern = """(?<=[\/\#])[^\/\#]*$""".r
+    val header = sc.parallelize(Seq(Configuration.ONTOLOGY_NODES_CSV_HEADER).toList)
+    val rows = ontologyNodeData.map(line => line._2 + "\tOntology\t" + line._1 + "\t" + Try(URLDecoder.decode((namePattern findFirstIn line._1).getOrElse("").replace("_", " "))).getOrElse("") )
     val result = header.union(rows)
 
     result
@@ -299,3 +377,5 @@ object DBpediaImporter {
     relResult
   }
 }
+
+
