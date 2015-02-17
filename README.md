@@ -35,7 +35,7 @@ DBpedia ontology mapped to pages:
 
     Download:   http://data.dws.informatik.uni-mannheim.de/dbpedia/2014/en/instance_types_en.nt.bz2
     File size:  bzip2 compressed archive (117 MB)
-    Header:     DBPEDIA_RESOURCE_URI, RDF_TYPE, DBPEDIA_RDF_TYPE
+    Header:     DBPEDIA_RESOURCE_URI, RDF_TYPE, DBPEDIA_ONTOLOGY_URI
 
 File outputs
 ------------
