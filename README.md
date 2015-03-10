@@ -1,4 +1,13 @@
 
+Download DBpedia Neo4j Database Files
+----------------
+
+The results of the code used to import DBpedia into Neo4j are available as a Neo4j data store (ex. `path/to/neo4j/data/graph.db`):
+
+* https://s3-us-west-1.amazonaws.com/neo4j-sample-datasets/dbpedia/dbpedia-store.tar.bz2
+
+Extract the `graph.db` folder to your Neo4j `data` folder and ensure that your configurations allow storage upgrades.
+
 Import DBpedia into Neo4j
 ======================
 
@@ -95,15 +104,6 @@ To copy the CSV files off of HDFS and onto your local file system, run the follo
     bin/hadoop fs -copyToLocal /category_rels.csv ~/neo4j-batch-importer/category_rels.csv
     bin/hadoop fs -copyToLocal /ontology_nodes.csv ~/neo4j-batch-importer/ontology_nodes.csv
     bin/hadoop fs -copyToLocal /ontology_rels.csv ~/neo4j-batch-importer/ontology_rels.csv
-
-Download the Neo4j data store files
-----------------
-
-The results of this Spark job are available as a Neo4j data store (ex. `path/to/neo4j/data/graph.db`):
-
-* https://s3-us-west-1.amazonaws.com/neo4j-sample-datasets/dbpedia/dbpedia-store.tar.bz2
-
-Extract the `graph.db` folder to your Neo4j `data` folder and ensure that your configurations allow storage upgrades.
 
 License
 ----------------
